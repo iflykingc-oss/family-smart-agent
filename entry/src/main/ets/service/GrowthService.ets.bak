@@ -1,0 +1,246 @@
+/**
+ * ============================================================================
+ * 用户增长服务 - GrowthService
+ * 增长功能：成就/分享/推荐
+ * ============================================================================
+ */
+
+import { HiLog } from '@kit.BasicServicesKit';
+import { FeatureFlags } from '../core/config/FeatureFlags';
+import { UserEntity } from '../domain/entities/UserEntity';
+import { UserRepository } from '../data/repositories/impl/UserRepository';
+import { publishEvent } from '../core/events/EventBus';
+import { AchievementUnlockedEvent } from '../core/events/DomainEvents';
+import { publishEvent } from '../core/events/EventBus';
+import { AchievementUnlockedEvent } from '../core/events/DomainEvents';
+
+/**
+ * 成就定义
+ */
+export interface Achievement {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  xpReward: number;
+  condition: (user: UserEntity) => boolean;
+}
+
+/**
+ * 成就解锁结果
+ */
+export interface AchievementUnlockResult {
+  unlocked: boolean;
+  achievement?: Achievement;
+  message: string;
+}
+
+/**
+ * 用户增长服务
+ */
+export class GrowthService {
+  private static instance: GrowthService | null = null;
+  
+  private userRepository: UserRepository;
+
+  /**
+   * 成就库
+   */
+  private readonly achievements: Achievement[] = [
+    {
+      id: 'first_step',
+      name: '第一步',
+      description: '完成第一次学习',
+      icon: '🌱',
+      xpReward: 10,
+      condition: (user) => user.stats.totalLearningMinutes > 0,
+    },
+    {
+      id: 'skill_complete',
+      name: '技能完成',
+      description: '完成一个技能的学习',
+      icon: '🎯',
+      xpReward: 50,
+      condition: (user) => user.stats.completedSkillsCount >= 1,
+    },
+    {
+      id: 'streak_3',
+      name: '初露锋芒',
+      description: '连续学习 3 天',
+      icon: '🔥',
+      xpReward: 30,
+      condition: (user) => user.stats.currentStreak >= 3,
+    },
+    {
+      id: 'streak_7',
+      name: '坚持不懈',
+      description: '连续学习 7 天',
+      icon: '💪',
+      xpReward: 70,
+      condition: (user) => user.stats.currentStreak >= 7,
+    },
+    {
+      id: 'streak_30',
+      name: '学习达人',
+      description: '连续学习 30 天',
+      icon: '🏆',
+      xpReward: 300,
+      condition: (user) => user.stats.currentStreak >= 30,
+    },
+    {
+      id: 'level_5',
+      name: 'Lv.5',
+      description: '达到 5 级',
+      icon: '⭐',
+      xpReward: 100,
+      condition: (user) => user.stats.currentLevel >= 5,
+    },
+    {
+      id: 'level_10',
+      name: 'Lv.10',
+      description: '达到 10 级',
+      icon: '🌟',
+      xpReward: 200,
+      condition: (user) => user.stats.currentLevel >= 10,
+    },
+  ];
+
+  /**
+   * 获取单例实例
+   */
+  static getInstance(): GrowthService {
+    if (!GrowthService.instance) {
+      GrowthService.instance = new GrowthService();
+    }
+    return GrowthService.instance;
+  }
+
+  private constructor() {
+    this.userRepository = UserRepository.getInstance();
+    HiLog.info("GrowthService", "初始化");
+  }
+
+  /**
+   * 检查成就解锁
+   */
+  async checkAchievements(userId: string): Promise<AchievementUnlockResult[]> {
+    // 检查功能开关
+    if (!FeatureFlags.ENABLE_ACHIEVEMENT_SYSTEM) {
+      return [];
+    }
+    
+    const results: AchievementUnlockResult[] = [];
+    
+    // 获取用户
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      return results;
+    }
+    
+    // 检查每个成就
+    for (const achievement of this.achievements) {
+      const isUnlocked = user.stats.achievementIds.includes(achievement.id);
+      if (isUnlocked) {
+        continue;
+      }
+      
+      // 检查条件
+      if (achievement.condition(user)) {
+        // 解锁成就
+        user.stats.achievementIds.push(achievement.id);
+        user.addXP(achievement.xpReward);
+        await this.userRepository.save(user);
+        
+        results.push({
+          unlocked: true,
+          achievement,
+          message: `🎉 解锁成就：${achievement.name}！获得${achievement.xpReward}XP`,
+        });
+        
+        HiLog.info("GrowthService", `解锁成就：${userId}/${achievement.name}`);
+      }
+    }
+    
+    return results;
+  }
+
+  /**
+   * 生成分享文案
+   */
+  generateShareContent(userId: string, type: 'achievement' | 'completion' | 'streak'): string {
+    // 检查功能开关
+    if (!FeatureFlags.ENABLE_SOCIAL_SHARE) {
+      return '';
+    }
+    
+    const templates: Record<string, string[]> = {
+      achievement: [
+        '我在小艺教学智能体解锁了"{achievement}"成就！一起来学习吧～',
+        '今天学习了{skill}，解锁了"{achievement}"成就！坚持就是胜利！',
+      ],
+      completion: [
+        '我完成了{skill}的学习！在小艺教学智能体，学习从未如此简单～',
+        '又学会了一个新技能：{skill}！感谢小艺教学智能体的陪伴～',
+      ],
+      streak: [
+        '我已经连续学习{streak}天啦！在小艺教学智能体，每天进步一点点～',
+        '学习 streak：{streak}天！坚持学习，遇见更好的自己～',
+      ],
+    };
+    
+    const template = templates[type][Math.floor(Math.random() * templates[type].length)];
+    return template;
+  }
+
+  /**
+   * 生成推荐链接
+   */
+  generateReferralLink(userId: string): string {
+    // 检查功能开关
+    if (!FeatureFlags.ENABLE_REFERRAL_SYSTEM) {
+      return '';
+    }
+    
+    // 简化实现：返回模拟链接
+    return `https://app.huawei.com/referral/${userId}`;
+  }
+
+  /**
+   * 获取所有成就
+   */
+  getAllAchievements(): Achievement[] {
+    return [...this.achievements];
+  }
+
+  /**
+   * 获取用户成就进度
+   */
+  async getUserAchievementProgress(userId: string): Promise<{
+    total: number;
+    unlocked: number;
+    progress: number;
+    nextAchievement?: Achievement;
+  }> {
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      return { total: 0, unlocked: 0, progress: 0 };
+    }
+    
+    const total = this.achievements.length;
+    const unlocked = user.stats.achievementIds.length;
+    const progress = Math.round((unlocked / total) * 100);
+    
+    // 查找下一个成就
+    let nextAchievement: Achievement | undefined;
+    for (const achievement of this.achievements) {
+      if (!user.stats.achievementIds.includes(achievement.id)) {
+        if (achievement.condition(user)) {
+          nextAchievement = achievement;
+          break;
+        }
+      }
+    }
+    
+    return { total, unlocked, progress, nextAchievement };
+  }
+}

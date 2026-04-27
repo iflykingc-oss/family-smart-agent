@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "家庭智联事务中枢 - 小艺智能体"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "家庭智联事务中枢"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "家庭智联"
+    }
+  ]
+}
